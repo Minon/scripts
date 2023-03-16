@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Milkshape3D",
     "author": "Minon",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (2, 80, 0),
     "location": "File > Import",
     "description": "Import Milkshape3D (.ms3d) files",
@@ -98,7 +98,7 @@ class MS3D_Import(Operator, ImportHelper):
                     continue
                 if baseKf.co.x > endFrame:
                     break
-                f.keyframe_points.insert(baseKf.co.x - startFrame, baseKf.co.y)
+                f.keyframe_points.insert(baseKf.co.x - startFrame, baseKf.co.y).interpolation = 'LINEAR'
     
     def read_ms3d(self, context, filepath, doFlipYZ, doSplitAnim):
         print("Attempting to open " + filepath)
@@ -188,7 +188,9 @@ class MS3D_Import(Operator, ImportHelper):
             material = bpy.data.materials.new(name)
             materials.append(material)
             material.use_nodes = True
-            bsdfNode = material.node_tree.nodes['Principled BSDF']
+            bsdfNode = material.node_tree.nodes.new('ShaderNodeEeveeSpecular')
+            material.node_tree.nodes.remove(material.node_tree.nodes['Principled BSDF'])
+            material.node_tree.links.new(bsdfNode.outputs['BSDF'], material.node_tree.nodes['Material Output'].inputs['Surface'])
             readFloat(f) #ambient r
             readFloat(f) #ambient g
             readFloat(f) #ambient b
@@ -285,32 +287,45 @@ class MS3D_Import(Operator, ImportHelper):
             posX = defaultAnim.fcurves.new('pose.bones["' + name + '"].location', index=0, action_group=name)
             posY = defaultAnim.fcurves.new('pose.bones["' + name + '"].location', index=1, action_group=name)
             posZ = defaultAnim.fcurves.new('pose.bones["' + name + '"].location', index=2, action_group=name)
-            rotW = defaultAnim.fcurves.new('pose.bones["' + name + '"].rotation_quaternion', index=0, action_group=name)
-            rotX = defaultAnim.fcurves.new('pose.bones["' + name + '"].rotation_quaternion', index=1, action_group=name)
-            rotY = defaultAnim.fcurves.new('pose.bones["' + name + '"].rotation_quaternion', index=2, action_group=name)
-            rotZ = defaultAnim.fcurves.new('pose.bones["' + name + '"].rotation_quaternion', index=3, action_group=name)
+            rotX = defaultAnim.fcurves.new('pose.bones["' + name + '"].rotation_euler', index=0, action_group=name)
+            rotY = defaultAnim.fcurves.new('pose.bones["' + name + '"].rotation_euler', index=1, action_group=name)
+            rotZ = defaultAnim.fcurves.new('pose.bones["' + name + '"].rotation_euler', index=2, action_group=name)
             sclX = defaultAnim.fcurves.new('pose.bones["' + name + '"].scale', index=0, action_group=name)
             sclY = defaultAnim.fcurves.new('pose.bones["' + name + '"].scale', index=1, action_group=name)
             sclZ = defaultAnim.fcurves.new('pose.bones["' + name + '"].scale', index=2, action_group=name)
             boneRotMat = rotMat 
             boneRotMat.invert()
+            lastRot = mathutils.Vector((0, 0, 0))
             for j in range(rotKfCount):
                 t = readFloat(f) * animFps #timePos
-                rot = readRotation(f) #rotation
-                q = rot.to_quaternion()
-                rotW.keyframe_points.insert(t, q.w)
-                rotX.keyframe_points.insert(t, q.x)
-                rotY.keyframe_points.insert(t, q.y)
-                rotZ.keyframe_points.insert(t, q.z)
+                rot = readVec3(f) #rotation
+                while lastRot.x - rot.x > math.pi:
+                    rot.x += 2 * math.pi
+                while lastRot.y - rot.y > math.pi:
+                    rot.y += 2 * math.pi
+                while lastRot.z - rot.z > math.pi:
+                    rot.z += 2 * math.pi
+                rotX.keyframe_points.insert(t, rot.x).interpolation = 'LINEAR'
+                rotY.keyframe_points.insert(t, rot.y).interpolation = 'LINEAR'
+                rotZ.keyframe_points.insert(t, rot.z).interpolation = 'LINEAR'
+                lastRot = rot
             for j in range(transKfCount):
                 t = readFloat(f) * animFps #timePos
                 pos = readVec3(f) #translation
-                posX.keyframe_points.insert(t, pos[0])
-                posY.keyframe_points.insert(t, pos[1])
-                posZ.keyframe_points.insert(t, pos[2])
-            sclX.keyframe_points.insert(0, 1)
-            sclY.keyframe_points.insert(0, 1)
-            sclZ.keyframe_points.insert(0, 1)
+                posX.keyframe_points.insert(t, pos[0]).interpolation = 'LINEAR'
+                posY.keyframe_points.insert(t, pos[1]).interpolation = 'LINEAR'
+                posZ.keyframe_points.insert(t, pos[2]).interpolation = 'LINEAR'
+            sclX.keyframe_points.insert(0, 1).interpolation = 'LINEAR'
+            sclY.keyframe_points.insert(0, 1).interpolation = 'LINEAR'
+            sclZ.keyframe_points.insert(0, 1).interpolation = 'LINEAR'
+        
+        #set pose bones to use xyz rotations
+        bpy.ops.object.mode_set(mode='POSE', toggle=False)
+        for b in obj.pose.bones:
+            if doFlipYZ:
+                b.rotation_mode = 'XZY'
+            else:
+                b.rotation_mode = 'XYZ'
             
         bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
         
@@ -337,10 +352,10 @@ class MS3D_Import(Operator, ImportHelper):
                 #use material comment to adjust other values not supported by ms3d
                 for line in comment.splitlines():
                     #<inputName> <texture filepath>
-                    i_space = line.find(' ')
+                    i_space = line.find('=')
                     if i_space > 0:
                         strInputName = line[0:i_space]
-                        bsdfNode = material.node_tree.nodes['Principled BSDF']
+                        bsdfNode = material.node_tree.nodes['Specular BSDF']
                         i_input = bsdfNode.inputs.find(strInputName)
                         #check if the input exists
                         if i_input > -1:
@@ -354,6 +369,9 @@ class MS3D_Import(Operator, ImportHelper):
                                 texPath = Path(dirpath + strPath[lastIndex+1:])
                             if texPath.exists():
                                 texNode.image = bpy.data.images.load(str(texPath.absolute()))
+                                #normal and roughness maps use non-color colorspace
+                                if strInputName == 'Normal' or strInputName == 'Roughness':
+                                    texNode.image.colorspace_settings.name = 'Non-Color'
                             else:
                                 print('Warning: texture path not found at: ' + str(texPath.absolute()))
             #joint comments
@@ -479,4 +497,5 @@ if __name__ == "__main__":
     register()
 
     # test call
+    #bpy.utils.register_class(MS3D_Import)
     #bpy.ops.import_test.ms3d('INVOKE_DEFAULT')
