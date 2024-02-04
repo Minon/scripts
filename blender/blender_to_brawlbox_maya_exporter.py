@@ -132,7 +132,7 @@ def action_from_maya_anim_format(context, anim_name, anim_file_lines,from_maya):
 
 
     #this code fixes the problem where the imported animation may be offseted (rot, loc and/or scale)
-    #if the character is not already in rest pose. I don't know why it happens.
+    #if the character isn't already in rest pose. I don't know why it happens.
     prev_auto = context.scene.tool_settings.use_keyframe_insert_auto
     context.scene.tool_settings.use_keyframe_insert_auto = False
 
@@ -397,9 +397,9 @@ def action_from_maya_anim_format(context, anim_name, anim_file_lines,from_maya):
             key_frame.handle_left_type = handle_left[0]
             key_frame.handle_right_type = handle_right[0]
             
-            if handle_left[0] is not 'AUTO':
+            if handle_left[0] != 'AUTO':
                 key_frame.handle_left = (key[0] + handle_left_offset[0], key[1] + handle_left_offset[1])
-            if handle_right[0] is not 'AUTO':
+            if handle_right[0] != 'AUTO':
                 key_frame.handle_right = (key[0] + handle_right_offset[0], key[1] + handle_right_offset[1])
 
                 
@@ -452,10 +452,13 @@ def action_to_maya_anim_format(context,bugfix_weight=True):
     frame_end = context.scene.frame_preview_end
     result_text_lines = []
     root_bone = get_root_pose_bone(active_object)
+    bone_rest_transforms = dict()
     brawl_bone_names = set()
     brawl_bone_names.add(root_bone.name)
+    bone_rest_transforms[root_bone.name] = (root_bone.bone.head, root_bone.matrix.to_euler())
     for child in root_bone.children_recursive:
         brawl_bone_names.add(child.name)
+        bone_rest_transforms[child.name] = (child.parent.bone.matrix_local.inverted() @ child.bone.head_local, child.bone.matrix.to_euler())
 
     axis = ['X','Y','Z','W']
     component = {'rotation_euler': 'rotate',\
@@ -503,15 +506,26 @@ def action_to_maya_anim_format(context,bugfix_weight=True):
             for key_info in channel.keyframe_points:
                 frame = int(key_info.co[0])
                 #for rotation components, values are in radians
-                value = key_info.co[1] * key_value_scaling
+                base_value = key_info.co[1] * key_value_scaling
+                value = key_info.co[1]
+                
+                #keyframe transforms are relative to the rest pose, which BC does not account for, so add it here
+                #todo: add a flag to tell the exporter to add the rest pose or not
+                if (data_component == 'location'):
+                    value = value + bone_rest_transforms[bone_group.name][0][channel.array_index]
+                elif (data_component == 'rotation_euler'):
+                    value = value + bone_rest_transforms[bone_group.name][1][channel.array_index]
+                
+                value = value * key_value_scaling
+                
                 if (frame>= frame_start and frame <= frame_end):
                     handle_left = key_info.handle_left
-                    offset_left = (frame - handle_left[0], value - (handle_left[1] * key_value_scaling))
+                    offset_left = (frame - handle_left[0], base_value - (handle_left[1] * key_value_scaling))
                     angle_left = degrees(atan2(offset_left[1],offset_left[0]))
                     type_left = 'fixed'
 
                     handle_right = key_info.handle_right
-                    offset_right = (handle_right[0] - frame,  (handle_right[1] * key_value_scaling) - value)
+                    offset_right = (handle_right[0] - frame,  (handle_right[1] * key_value_scaling) - base_value)
                     angle_right = degrees(atan2(offset_right[1],offset_right[0]))
                     type_right = 'fixed'
 
@@ -975,7 +989,7 @@ def context_override_area(context, area_type, region_type='WINDOW'):
                     if region.type == region_type:
                         info = (window, screen, area, region)
 
-    if info is not None:
+    if info != None:
         context_override = ContextOverride(context)
         context_override.window, context_override.screen, context_override.area, context_override.region =info
         
@@ -1078,7 +1092,7 @@ class POSE_OT_brawlbox_anim_import(Operator, ImportHelper):
 
     @classmethod
     def poll(cls, context):
-        return (context.active_object is not None) and isinstance(context.active_object.data, bpy.types.Armature)
+        return (context.active_object != None) and isinstance(context.active_object.data, bpy.types.Armature)
 
     def execute(self, context):
         
@@ -1106,7 +1120,7 @@ class POSE_OT_brawlbox_anim_export(Operator, ExportHelper):
 
     @classmethod
     def poll(cls, context):
-        return (context.active_object is not None) and isinstance(context.active_object.data, bpy.types.Armature) and (context.active_object.animation_data is not None) and (context.active_object.animation_data.action is not None)
+        return (context.active_object != None) and isinstance(context.active_object.data, bpy.types.Armature) and (context.active_object.animation_data != None) and (context.active_object.animation_data.action != None)
 
     def execute(self, context):
         brawlbox_anim_export(context, self.filepath,self.bugfix_weight)
@@ -1128,7 +1142,7 @@ class POSE_OT_enter_edit_mode(Operator):
     
     @classmethod
     def poll(cls,context):
-        if (context.active_object is not None) and isinstance(context.active_object.data,bpy.types.Armature):
+        if (context.active_object != None) and isinstance(context.active_object.data,bpy.types.Armature):
             bones = [bone for bone in context.active_object.data.bones if 'brawl_bind' in bone]
             return len(bones) > 0
         return False
@@ -1167,7 +1181,7 @@ class POSE_OT_exit_edit_mode(Operator):
 
     @classmethod
     def poll(cls,context):
-        if (context.active_object is not None) and isinstance(context.active_object.data,bpy.types.Armature):
+        if (context.active_object != None) and isinstance(context.active_object.data,bpy.types.Armature):
             bones = [bone for bone in context.active_object.data.bones if 'brawl_bind' in bone]
             return len(bones) > 0
         return False
@@ -1187,7 +1201,7 @@ class POSE_OT_exit_edit_mode(Operator):
 
 
 def poll_bindpose_import(context):
-    return (context.active_object is not None) and (isinstance(context.active_object.data, bpy.types.Armature))
+    return (context.active_object != None) and (isinstance(context.active_object.data, bpy.types.Armature))
 
 def update_import_items(self, context):
     if ('MODEL' not in self.import_items) and (not poll_bindpose_import(context)):
@@ -1490,7 +1504,7 @@ class POSE_ARMATURE_OT_remove_brawl_info(bpy.types.Operator):
 
     @classmethod
     def poll(cls,context):
-        return context.selected_pose_bones is not None and len(context.selected_pose_bones) > 0 and context.mode == 'POSE'
+        return context.selected_pose_bones != None and len(context.selected_pose_bones) > 0 and context.mode == 'POSE'
 
     def execute(self,context):
         pose_bones = context.selected_pose_bones
@@ -1514,7 +1528,7 @@ class POSE_ARMATURE_OT_clear_to_bind(bpy.types.Operator):
 
     @classmethod
     def poll(cls,context):
-        return context.selected_pose_bones is not None and len(context.selected_pose_bones) > 0 and context.mode == 'POSE'
+        return context.selected_pose_bones != None and len(context.selected_pose_bones) > 0 and context.mode == 'POSE'
 
     def execute(self,context):
         pose_bones = context.selected_pose_bones
@@ -1626,3 +1640,4 @@ def unregister():
 #unregister()
 if __name__ == "__main__":
     register()
+
