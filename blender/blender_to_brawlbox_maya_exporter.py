@@ -457,8 +457,9 @@ def action_to_maya_anim_format(context,bugfix_weight=True):
     brawl_bone_names.add(root_bone.name)
     bone_rest_transforms[root_bone.name] = (root_bone.bone.head, root_bone.matrix.to_euler())
     for child in root_bone.children_recursive:
-        brawl_bone_names.add(child.name)
-        bone_rest_transforms[child.name] = (child.parent.bone.matrix_local.inverted() @ child.bone.head_local, child.bone.matrix.to_euler())
+        if child.bone.use_deform:
+            brawl_bone_names.add(child.name)
+            bone_rest_transforms[child.name] = (child.parent.bone.matrix_local.inverted() @ child.bone.head_local, child.bone.matrix.to_euler())
 
     axis = ['X','Y','Z','W']
     component = {'rotation_euler': 'rotate',\
