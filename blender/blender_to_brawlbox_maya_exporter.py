@@ -128,7 +128,7 @@ def line_value_str(line):
     #assumes line in format of 'identifier value'
     return line.split(' ')[1]
 
-def action_from_maya_anim_format(context, anim_name, anim_file_lines,from_maya):
+def action_from_maya_anim_format(context, anim_name, anim_file_lines,from_maya, use_brawl_bind):
 
 
     #this code fixes the problem where the imported animation may be offseted (rot, loc and/or scale)
@@ -142,6 +142,15 @@ def action_from_maya_anim_format(context, anim_name, anim_file_lines,from_maya):
     bpy.ops.pose.loc_clear()
     bpy.ops.pose.rot_clear()
     bpy.ops.pose.scale_clear()
+
+    #get rest pose transforms.  These need to be subtracted out from the imported animation
+    bone_rest_transforms = dict()
+    for bone in context.active_object.data.bones:
+        if bone.use_deform:
+            if bone.parent:
+                bone_rest_transforms[bone.name] = (bone.parent.matrix_local.inverted() @ bone.head_local, bone.matrix.to_euler())
+            else:
+                bone_rest_transforms[bone.name] = (bone.head, bone.matrix.to_euler())
 
 
     context.scene.tool_settings.use_keyframe_insert_auto = prev_auto
@@ -251,6 +260,15 @@ def action_from_maya_anim_format(context, anim_name, anim_file_lines,from_maya):
                 component = attr_to_component[attr_name]
             key_value_scaling = component_scaling[attr_name]
             data_path = 'pose.bones[\"{0}\"].{1}'.format(node_name, component)
+            
+            rest_offset = 0
+            if not use_brawl_bind:
+                rest_transform = bone_rest_transforms.get(node_name)
+                if rest_transform:
+                    if component == 'location':
+                        rest_offset = rest_transform[0][array_index]
+                    elif component == 'rotation_euler':
+                        rest_offset = rest_transform[1][array_index] / key_value_scaling;
 
             '''
             currently, i'm going to assume that the imported rotation type and order matches the imported armature data.
@@ -270,6 +288,8 @@ def action_from_maya_anim_format(context, anim_name, anim_file_lines,from_maya):
                 weight_left = '0'
                 angle_right = '0'
                 weight_right = '0'
+                
+                value = float(value) - rest_offset
 
                 if type_left == 'fixed':
                     angle_left, weight_left = key_line_split[7 + splice_offset:9 + splice_offset]
@@ -283,7 +303,7 @@ def action_from_maya_anim_format(context, anim_name, anim_file_lines,from_maya):
                 #if node_name == 'HipN' and data_path == 'pose.bones["HipN"].location' and array_index==1:
                 #    print('angle:{0} weight:{1}'.format(angle_left,weight_left))
                 #(key, handle_left, handle_right)    
-                parsed_keyinfos.append(((int(frame),float(value) * key_value_scaling),\
+                parsed_keyinfos.append(((int(frame), value * key_value_scaling),\
                                         (handle_type[type_left],float(angle_left)* angle_scaling, float(weight_left)),\
                                         (handle_type[type_right],float(angle_right)* angle_scaling, float(weight_right))))
 
@@ -327,7 +347,7 @@ def action_from_maya_anim_format(context, anim_name, anim_file_lines,from_maya):
     #afterwards, imported keys will overwrite bindpose keys. Missing keyframes will leave the bindpose keys.
     #-
     #for exported animations, since BB treats missing keys as bind, we don't have to do so manually again
-    keyframe_bindpose(context,frame_start)
+    keyframe_bindpose(context,frame_start,use_brawl_bind)
     
     for channel_info in parsed_anim_infos:
         bone_name = channel_info[0]
@@ -574,7 +594,7 @@ def calculate_local_bind_matrices(active_object):
 
     return bind_matrices
 
-def brawlbox_anim_import(context, filepath,from_maya):
+def brawlbox_anim_import(context, filepath, from_maya, use_brawl_bind):
     '''
     imports action directly
     '''
@@ -587,7 +607,7 @@ def brawlbox_anim_import(context, filepath,from_maya):
     print('finished reading file')
 
     print("converting to action..")
-    action = action_from_maya_anim_format(context, filename, anim_file_lines,from_maya)
+    action = action_from_maya_anim_format(context, filename, anim_file_lines,from_maya, use_brawl_bind)
     print("... finished converting to action")
 
     print('.. finished importing maya animation: ' + filename)
@@ -595,7 +615,7 @@ def brawlbox_anim_import(context, filepath,from_maya):
     return action
 
 
-def keyframe_bindpose(context,bind_frame):
+def keyframe_bindpose(context,bind_frame,use_brawl_bind=True):
     pre_mode = context.mode
     pre_frame = context.scene.frame_current
 
@@ -613,7 +633,10 @@ def keyframe_bindpose(context,bind_frame):
     #but they should be equal to bind so we fix that here.
     for bone_name,bone_bind in bind_matrices.items():
         pose_bone = pose_bones[bone_name]
-        pose_bone.matrix_basis = bone_bind
+        if use_brawl_bind:
+            pose_bone.matrix_basis = bone_bind
+        else:
+            pose_bone.matrix = pose_bone.bone.matrix_local
         pose_bone.keyframe_insert(data_path='location',group=bone_name)
         pose_bone.keyframe_insert(data_path='rotation_euler',group=bone_name)
         pose_bone.keyframe_insert(data_path='scale',group=bone_name)
@@ -1090,6 +1113,10 @@ class POSE_OT_brawlbox_anim_import(Operator, ImportHelper):
             maxlen=255,  # Max internal buffer length, longer would be clamped.
             )
     #anim_from_maya = BoolProperty(name='ANIM From Maya',default=False)
+    use_brawl_bind : BoolProperty(
+            name='Use brawl_bind',
+            default=True
+            )
 
     @classmethod
     def poll(cls, context):
@@ -1101,7 +1128,7 @@ class POSE_OT_brawlbox_anim_import(Operator, ImportHelper):
         filepaths = [os.path.join(directory, file_elem.name) for file_elem in self.files if os.path.isfile(os.path.join(directory, file_elem.name))]
         
         for filepath in filepaths:
-            brawlbox_anim_import(context, filepath,False)#self.anim_from_maya)
+            brawlbox_anim_import(context, filepath,False, self.use_brawl_bind)#self.anim_from_maya)
         return {'FINISHED'}
 
 @register_wrap
