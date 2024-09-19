@@ -483,8 +483,8 @@ def action_to_maya_anim_format(context,bugfix_weight=True):
 
     axis = ['X','Y','Z','W']
     component = {'rotation_euler': 'rotate',\
-                'rotation_quaternion': 'rotate',\
-                'rotation_axis_angle': 'rotate',\
+                #'rotation_quaternion': 'rotate',\
+                #'rotation_axis_angle': 'rotate',\
                 'location': 'translate',\
                 'scale': 'scale',\
     }
