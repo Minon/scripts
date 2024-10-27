@@ -531,12 +531,16 @@ def action_to_maya_anim_format(context,bugfix_weight=True):
                 value = key_info.co[1]
                 
                 #keyframe transforms are relative to the rest pose, which BC does not account for, so add it here
-                #todo: add a flag to tell the exporter to add the rest pose or not
                 if (data_component == 'location'):
                     value = value + bone_rest_transforms[bone_group.name][0][channel.array_index]
                 elif (data_component == 'rotation_euler'):
-                    value = value + bone_rest_transforms[bone_group.name][1][channel.array_index]
-                
+                    #Can't just add the value for the channel since application order matters for rotations
+                    #This approach is a bit brute forced: Use scene.frame_set to have blender calculate the full rotation at the given frame
+                    bpy.context.scene.frame_set(frame)
+                    valEuler = Euler(active_object.pose.bones[bone_group.name].rotation_euler)
+                    valEuler.rotate(bone_rest_transforms[bone_group.name][1])
+                    value = valEuler[channel.array_index]
+                    
                 value = value * key_value_scaling
                 
                 if (frame>= frame_start and frame <= frame_end):
